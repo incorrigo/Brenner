@@ -1,0 +1,5 @@
+/.idea/
+/vendor/
+/config/*.local.php
+/storage/api_sessions/*
+!/storage/api_sessions/.gitkeep

@@ -1,0 +1,32 @@
+root = true
+
+[*]
+indent_style = tab
+indent_size = 4
+tab_width = 4
+ij_continuation_indent_size = 4
+ij_smart_tabs = false
+
+[{*.php,*.phtml,*.inc,*.module,*.php4,*.php5,*.hphp}]
+ij_php_anonymous_brace_style = end_of_line
+ij_php_block_brace_style = end_of_line
+ij_php_catch_on_new_line = false
+ij_php_class_brace_style = end_of_line
+ij_php_else_on_new_line = false
+ij_php_finally_on_new_line = false
+ij_php_keep_rparen_and_lbrace_on_one_line = true
+ij_php_lambda_brace_style = end_of_line
+ij_php_method_brace_style = end_of_line
+ij_php_namespace_brace_style = 1
+ij_php_space_before_catch_left_brace = true
+ij_php_space_before_class_left_brace = true
+ij_php_space_before_do_left_brace = true
+ij_php_space_before_else_left_brace = true
+ij_php_space_before_finally_left_brace = true
+ij_php_space_before_for_left_brace = true
+ij_php_space_before_if_left_brace = true
+ij_php_space_before_method_left_brace = true
+ij_php_space_before_switch_left_brace = true
+ij_php_space_before_try_left_brace = true
+ij_php_space_before_while_left_brace = true
+ij_php_while_on_new_line = false

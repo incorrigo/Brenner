@@ -8,7 +8,6 @@ require_once dirname(__DIR__) . '/src/autoload.php';
 
 $config = Config::fromDirectory(dirname(__DIR__) . '/config');
 $actions = $config->actions();
-$defaultAction = array_key_first($actions) ?? 'system.status';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -19,35 +18,32 @@ $defaultAction = array_key_first($actions) ?? 'system.status';
 	<style>
 		:root {
 			color-scheme: light;
-			--bg: #f5f1e8;
+			--bg: #f3efe6;
 			--panel: #fffdf8;
-			--ink: #231f1a;
-			--muted: #6c645a;
-			--line: #d4cab9;
-			--accent: #8b3a1d;
-			--accent-soft: #e9c9b7;
-			--success: #215732;
+			--ink: #1f1914;
+			--muted: #62584d;
+			--line: #d8c9b6;
+			--accent: #7f2f12;
+			--accent-soft: #f0d0bf;
+			--code: #171311;
 		}
 
-		* {
-			box-sizing: border-box;
-		}
+		* { box-sizing: border-box; }
 
 		body {
 			margin: 0;
 			font-family: Georgia, "Times New Roman", serif;
 			background:
-				radial-gradient(circle at top left, rgba(139, 58, 29, 0.10), transparent 32rem),
+				radial-gradient(circle at top left, rgba(127, 47, 18, 0.12), transparent 28rem),
 				linear-gradient(180deg, #f8f2e8 0%, var(--bg) 100%);
 			color: var(--ink);
 		}
 
 		main {
-			width: min(1100px, calc(100vw - 2rem));
+			width: min(1080px, calc(100vw - 2rem));
 			margin: 2rem auto;
 			display: grid;
-			gap: 1.25rem;
-			grid-template-columns: 1.1fr 0.9fr;
+			gap: 1.2rem;
 		}
 
 		.panel {
@@ -56,7 +52,6 @@ $defaultAction = array_key_first($actions) ?? 'system.status';
 			border-radius: 20px;
 			padding: 1.5rem;
 			box-shadow: 0 18px 40px rgba(35, 31, 26, 0.08);
-			backdrop-filter: blur(8px);
 		}
 
 		h1, h2 {
@@ -71,73 +66,12 @@ $defaultAction = array_key_first($actions) ?? 'system.status';
 			line-height: 1.6;
 		}
 
-		label {
-			display: block;
-			margin-bottom: 1rem;
-			font-size: 0.95rem;
-			color: var(--muted);
-		}
+		.lead { font-size: 1.08rem; }
 
-		input, select, textarea, button {
-			width: 100%;
-			border-radius: 14px;
-			border: 1px solid var(--line);
-			padding: 0.9rem 1rem;
-			font: inherit;
-			color: var(--ink);
-			background: #fff;
-		}
-
-		textarea {
-			min-height: 220px;
-			resize: vertical;
-			font-family: Consolas, "Courier New", monospace;
-			font-size: 0.92rem;
-		}
-
-		button {
-			border: 0;
-			background: linear-gradient(135deg, var(--accent) 0%, #b75b35 100%);
-			color: #fff8f3;
-			font-weight: 700;
-			cursor: pointer;
-			transition: transform 0.18s ease, box-shadow 0.18s ease;
-			box-shadow: 0 10px 25px rgba(139, 58, 29, 0.22);
-		}
-
-		button:hover {
-			transform: translateY(-1px);
-		}
-
-		.actions {
+		.grid {
 			display: grid;
-			gap: 0.75rem;
-		}
-
-		.action-card {
-			border: 1px solid var(--line);
-			border-radius: 14px;
-			padding: 1rem;
-			background: linear-gradient(180deg, #fff, #fffaf4);
-		}
-
-		.action-card strong {
-			display: block;
-			margin-bottom: 0.35rem;
-		}
-
-		code, pre {
-			font-family: Consolas, "Courier New", monospace;
-		}
-
-		pre {
-			margin: 0;
-			padding: 1rem;
-			border-radius: 14px;
-			background: #211d18;
-			color: #f8efe3;
-			overflow: auto;
-			min-height: 320px;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 1rem;
 		}
 
 		.badge {
@@ -156,190 +90,136 @@ $defaultAction = array_key_first($actions) ?? 'system.status';
 		.notice {
 			padding: 0.8rem 1rem;
 			border-radius: 14px;
-			background: #eef7ef;
-			color: var(--success);
-			border: 1px solid #c5dfcb;
+			background: #fff2eb;
+			color: var(--accent);
+			border: 1px solid #ebc5b3;
 		}
 
-		@media (max-width: 900px) {
-			main {
-				grid-template-columns: 1fr;
-			}
+		pre, code {
+			font-family: Consolas, "Courier New", monospace;
+		}
+
+		pre {
+			margin: 0;
+			padding: 1rem;
+			border-radius: 14px;
+			background: var(--code);
+			color: #f8efe3;
+			overflow: auto;
+		}
+
+		table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 0.95rem;
+		}
+
+		th, td {
+			text-align: left;
+			padding: 0.8rem 0.6rem;
+			border-bottom: 1px solid var(--line);
+			vertical-align: top;
+		}
+
+		th { color: var(--muted); font-weight: 600; }
+
+		@media (max-width: 860px) {
+			.grid { grid-template-columns: 1fr; }
 		}
 	</style>
 </head>
 <body>
 <main>
 	<section class="panel">
-		<div class="badge">PHP only</div>
+		<div class="badge">HTTPS Rotating Link</div>
 		<h1>Private Database Gateway</h1>
-		<p>
-			This website never talks to the private database directly. It only calls <code>api.php</code>,
-			and the PHP server performs the database work locally.
-		</p>
+		<p class="lead">This endpoint is designed for a C# Windows desktop client using a rotating single-use command GUID.</p>
 		<div class="notice">
-			The server running this code must already be able to reach the private database over LAN, VPN, or localhost.
+			All application requests go to <code>/api.php</code> as <code>POST</code> JSON over <code>HTTPS</code>. The PHP server then talks to MySQL on <code>localhost:3306</code>.
 		</div>
-		<form id="gateway-form">
-			<label>
-				API key
-				<input id="api-key" name="api_key" type="password" placeholder="Matches config/app.php">
-			</label>
-			<label>
-				Action
-				<select id="action" name="action">
-					<?php foreach ($actions as $name => $action): ?>
-						<option value="<?= htmlspecialchars($name, ENT_QUOTES) ?>" <?= $name === $defaultAction ? 'selected' : '' ?>>
-							<?= htmlspecialchars($name, ENT_QUOTES) ?>
-						</option>
-					<?php endforeach; ?>
-				</select>
-			</label>
-			<label>
-				Method
-				<input id="method" type="text" value="GET" readonly>
-			</label>
-			<label>
-				Params JSON
-				<textarea id="params" name="params">{}</textarea>
-			</label>
-			<button type="submit">Call API</button>
-		</form>
+	</section>
+
+	<section class="grid">
+		<article class="panel">
+			<h2>Open Link</h2>
+			<pre>{
+  "action": "AUTH.OPEN_LINK",
+  "params": {
+    "client_id": "DESKTOP001",
+    "client_secret": "your-client-secret"
+  }
+}</pre>
+			<p>The response returns a <code>session_id</code> and a one-time <code>command_guid</code>.</p>
+		</article>
+
+		<article class="panel">
+			<h2>Authenticated Request</h2>
+			<pre>{
+  "action": "LINK.PING",
+  "session": {
+    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
+    "command_guid": "8ef175e9-e388-4c83-940b-6f4f97d58868"
+  },
+  "params": {}
+}</pre>
+			<p>Every authenticated response returns the next <code>command_guid</code>. The old one is invalid after one use.</p>
+		</article>
 	</section>
 
 	<section class="panel">
-		<h2>Response</h2>
-		<pre id="response">Submit a request to inspect the JSON response.</pre>
+		<h2>Replay Safety</h2>
+		<pre>{
+  "ok": true,
+  "request_id": "d3c48f7f4f264d7ea0d0f4d1d1684f51",
+  "action": "LINK.PING",
+  "data": {
+    "authenticated": true,
+    "message": "Rotating link is alive."
+  },
+  "client": {
+    "client_id": "DESKTOP001",
+    "scopes": [
+      "users.read"
+    ]
+  },
+  "session": {
+    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
+    "command_guid": "3cfb7b95-358c-4f45-b0aa-5c37a9ee25d2",
+    "sequence": 1,
+    "expires_at": "2026-03-14T02:30:00+00:00"
+  },
+  "error": null
+}</pre>
+			<p>If the client retries the exact same request because the response was lost, the gateway replays the cached prior response instead of breaking session state.</p>
+		</section>
+
+	<section class="panel">
+		<h2>Configured Actions</h2>
+		<table>
+			<thead>
+				<tr>
+					<th>Action</th>
+					<th>Auth</th>
+					<th>Description</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php foreach ($actions as $name => $action): ?>
+					<tr>
+						<td><strong><?= htmlspecialchars($name, ENT_QUOTES) ?></strong></td>
+						<td><?= ($action['requires_auth'] ?? true) === true ? 'Rotating link' : 'Credentials only' ?></td>
+						<td><?= htmlspecialchars((string) ($action['description'] ?? 'No description.'), ENT_QUOTES) ?></td>
+					</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
 	</section>
 
 	<section class="panel">
-		<h2>Available Actions</h2>
-		<div class="actions">
-			<?php foreach ($actions as $name => $action): ?>
-				<article class="action-card">
-					<strong><?= htmlspecialchars($name, ENT_QUOTES) ?></strong>
-					<div><?= htmlspecialchars(implode(', ', $action['methods'] ?? ['GET']), ENT_QUOTES) ?></div>
-					<p><?= htmlspecialchars((string) ($action['description'] ?? 'No description.'), ENT_QUOTES) ?></p>
-					<?php if (!empty($action['params']) && is_array($action['params'])): ?>
-						<code><?= htmlspecialchars(json_encode($action['params'], JSON_UNESCAPED_SLASHES), ENT_QUOTES) ?></code>
-					<?php else: ?>
-						<code>No parameters.</code>
-					<?php endif; ?>
-				</article>
-			<?php endforeach; ?>
-		</div>
+		<h2>Desktop Sample</h2>
+		<p>The sample C# caller lives at <code>examples/CSharp/HTTPSAPIGatewayClient.cs</code>.</p>
+		<p>API version: <strong><?= htmlspecialchars((string) $config->app('api_version', 'unknown'), ENT_QUOTES) ?></strong></p>
 	</section>
 </main>
-
-<script>
-	const actions = <?= json_encode($actions, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) ?>;
-	const form = document.getElementById('gateway-form');
-	const actionSelect = document.getElementById('action');
-	const methodField = document.getElementById('method');
-	const paramsField = document.getElementById('params');
-	const responseBox = document.getElementById('response');
-
-	function buildExamplePayload(actionName) {
-		const action = actions[actionName] || {};
-		const rules = action.params || {};
-		const payload = {};
-
-		Object.keys(rules).forEach((key) => {
-			const rule = rules[key];
-
-			if (Object.prototype.hasOwnProperty.call(rule, 'default')) {
-				payload[key] = rule.default;
-				return;
-			}
-
-			switch (rule.type) {
-				case 'int':
-				case 'integer':
-					payload[key] = rule.min || 1;
-					break;
-				case 'bool':
-				case 'boolean':
-					payload[key] = true;
-					break;
-				case 'float':
-					payload[key] = 1.5;
-					break;
-				default:
-					payload[key] = '';
-			}
-		});
-
-		return JSON.stringify(payload, null, 2);
-	}
-
-	function syncActionUi() {
-		const action = actions[actionSelect.value] || {};
-		const methods = action.methods || ['GET'];
-
-		methodField.value = methods[0] || 'GET';
-		paramsField.value = buildExamplePayload(actionSelect.value);
-	}
-
-	actionSelect.addEventListener('change', syncActionUi);
-
-	form.addEventListener('submit', async (event) => {
-		event.preventDefault();
-
-		const actionName = actionSelect.value;
-		const apiKey = document.getElementById('api-key').value;
-		const action = actions[actionName] || {};
-		const method = ((action.methods || ['POST'])[0] || 'POST').toUpperCase();
-		let params = {};
-
-		try {
-			params = paramsField.value.trim() === '' ? {} : JSON.parse(paramsField.value);
-		} catch (error) {
-			responseBox.textContent = 'Params JSON is invalid.';
-			return;
-		}
-
-		responseBox.textContent = 'Loading...';
-
-		let response;
-
-		if (method === 'GET') {
-			const query = new URLSearchParams({ action: actionName });
-
-			Object.keys(params).forEach((key) => {
-				query.set(key, String(params[key]));
-			});
-
-			response = await fetch(`./api.php?${query.toString()}`, {
-				method: 'GET',
-				headers: {
-					'X-Api-Key': apiKey,
-				},
-			});
-		} else {
-			response = await fetch('./api.php', {
-				method,
-				headers: {
-					'Content-Type': 'application/json',
-					'X-Api-Key': apiKey,
-				},
-				body: JSON.stringify({
-					action: actionName,
-					params: params,
-				}),
-			});
-		}
-
-		const text = await response.text();
-
-		try {
-			const json = JSON.parse(text);
-			responseBox.textContent = JSON.stringify(json, null, 2);
-		} catch (error) {
-			responseBox.textContent = text;
-		}
-	});
-
-	syncActionUi();
-</script>
 </body>
 </html>

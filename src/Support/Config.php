@@ -9,12 +9,14 @@ use RuntimeException;
 final class Config
 {
 	private array $app;
+	private array $auth;
 	private array $databases;
 	private array $actions;
 
-	public function __construct(array $app, array $databases, array $actions)
+	public function __construct(array $app, array $auth, array $databases, array $actions)
 	{
 		$this->app = $app;
+		$this->auth = $auth;
 		$this->databases = $databases;
 		$this->actions = $actions;
 	}
@@ -22,10 +24,11 @@ final class Config
 	public static function fromDirectory(string $configDirectory): self
 	{
 		$app = self::loadConfigPair($configDirectory, 'app');
+		$auth = self::loadConfigPair($configDirectory, 'auth');
 		$databases = self::loadConfigPair($configDirectory, 'databases');
 		$actions = self::loadConfigPair($configDirectory, 'actions');
 
-		return new self($app, $databases, $actions);
+		return new self($app, $auth, $databases, $actions);
 	}
 
 	public function app(?string $key = null, mixed $default = null): mixed
@@ -35,6 +38,15 @@ final class Config
 		}
 
 		return $this->app[$key] ?? $default;
+	}
+
+	public function auth(?string $key = null, mixed $default = null): mixed
+	{
+		if ($key === null) {
+			return $this->auth;
+		}
+
+		return $this->auth[$key] ?? $default;
 	}
 
 	public function database(string $name): array

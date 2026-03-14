@@ -62,6 +62,12 @@ final class APIActionRunner
 				],
 			],
 			'session_open' => $this->openSession($actionName, $requestMethod, $params),
+			'db_profiles' => $this->listDatabaseProfiles($actionName, $requestMethod),
+			'db_tables' => $this->listDatabaseTables($actionName, $requestMethod, $params),
+			'db_columns' => $this->listDatabaseColumns($actionName, $requestMethod, $params),
+			'db_read' => $this->runDatabaseRead($actionName, $requestMethod, $params),
+			'db_write' => $this->runDatabaseWrite($actionName, $requestMethod, $params),
+			'db_execute' => $this->runDatabaseExecute($actionName, $requestMethod, $params),
 			'echo' => [
 				'action' => $actionName,
 				'data' => [
@@ -107,11 +113,189 @@ final class APIActionRunner
 		];
 	}
 
+	private function listDatabaseProfiles(string $actionName, string $requestMethod): array
+	{
+		$profiles = array_values(array_filter(
+			array_keys($this->config->databases()),
+			static fn (mixed $name): bool => is_string($name) && $name !== '' && $name[0] !== '_'
+		));
+		sort($profiles, SORT_STRING);
+
+		return [
+			'action' => $actionName,
+			'data' => [
+				'profiles' => $profiles,
+				'count' => count($profiles),
+			],
+			'meta' => [
+				'method' => $requestMethod,
+				'type' => 'db_profiles',
+			],
+		];
+	}
+
+	private function listDatabaseTables(string $actionName, string $requestMethod, array $params): array
+	{
+		$databaseProfile = $this->resolveDatabaseProfile($params['database'] ?? null);
+		$connection = $this->databaseManager->connection($databaseProfile);
+		$this->assertMySqlDriver($connection, $actionName);
+		$schema = $this->resolveSchemaName($connection, $params['schema'] ?? null);
+
+		$statement = $connection->prepare(
+			'SELECT table_name FROM information_schema.tables WHERE table_schema = :schema ORDER BY table_name'
+		);
+		$statement->bindValue(':schema', $schema, PDO::PARAM_STR);
+		$statement->execute();
+
+		$rows = $statement->fetchAll();
+		$tables = [];
+		foreach ($rows as $row) {
+			$tables[] = (string) ($row['table_name'] ?? '');
+		}
+
+		return [
+			'action' => $actionName,
+			'data' => [
+				'database_profile' => $databaseProfile,
+				'schema' => $schema,
+				'tables' => $tables,
+				'count' => count($tables),
+			],
+			'meta' => [
+				'method' => $requestMethod,
+				'type' => 'db_tables',
+				'database' => $databaseProfile,
+			],
+		];
+	}
+
+	private function listDatabaseColumns(string $actionName, string $requestMethod, array $params): array
+	{
+		$databaseProfile = $this->resolveDatabaseProfile($params['database'] ?? null);
+		$table = (string) ($params['table'] ?? '');
+		$connection = $this->databaseManager->connection($databaseProfile);
+		$this->assertMySqlDriver($connection, $actionName);
+		$schema = $this->resolveSchemaName($connection, $params['schema'] ?? null);
+
+		$statement = $connection->prepare(
+			'SELECT column_name, data_type, is_nullable, column_key, column_default, extra
+			 FROM information_schema.columns
+			 WHERE table_schema = :schema AND table_name = :table
+			 ORDER BY ordinal_position'
+		);
+		$statement->bindValue(':schema', $schema, PDO::PARAM_STR);
+		$statement->bindValue(':table', $table, PDO::PARAM_STR);
+		$statement->execute();
+		$columns = $statement->fetchAll();
+
+		return [
+			'action' => $actionName,
+			'data' => [
+				'database_profile' => $databaseProfile,
+				'schema' => $schema,
+				'table' => $table,
+				'columns' => $columns,
+				'count' => count($columns),
+			],
+			'meta' => [
+				'method' => $requestMethod,
+				'type' => 'db_columns',
+				'database' => $databaseProfile,
+			],
+		];
+	}
+
+	private function runDatabaseRead(string $actionName, string $requestMethod, array $params): array
+	{
+		$databaseProfile = $this->resolveDatabaseProfile($params['database'] ?? null);
+		$sql = $this->normalizeSql((string) ($params['sql'] ?? ''));
+		$bindings = is_array($params['bindings'] ?? null) ? $params['bindings'] : [];
+		$maxRows = (int) ($params['max_rows'] ?? 500);
+		$this->assertReadOnlyQuery($sql);
+
+		$connection = $this->databaseManager->connection($databaseProfile);
+		$statement = $connection->prepare($sql);
+		$this->bindNamedParameters($statement, $bindings);
+		$statement->execute();
+		$rows = $statement->fetchAll();
+
+		$truncated = false;
+		if (count($rows) > $maxRows) {
+			$rows = array_slice($rows, 0, $maxRows);
+			$truncated = true;
+		}
+
+		return [
+			'action' => $actionName,
+			'data' => [
+				'rows' => $rows,
+				'row_count' => count($rows),
+				'truncated' => $truncated,
+				'max_rows' => $maxRows,
+			],
+			'meta' => [
+				'method' => $requestMethod,
+				'type' => 'db_read',
+				'database' => $databaseProfile,
+			],
+		];
+	}
+
+	private function runDatabaseWrite(string $actionName, string $requestMethod, array $params): array
+	{
+		$databaseProfile = $this->resolveDatabaseProfile($params['database'] ?? null);
+		$sql = $this->normalizeSql((string) ($params['sql'] ?? ''));
+		$bindings = is_array($params['bindings'] ?? null) ? $params['bindings'] : [];
+		$this->assertWriteQuery($sql);
+
+		$connection = $this->databaseManager->connection($databaseProfile);
+		$statement = $connection->prepare($sql);
+		$this->bindNamedParameters($statement, $bindings);
+		$statement->execute();
+
+		return [
+			'action' => $actionName,
+			'data' => [
+				'affected_rows' => $statement->rowCount(),
+				'last_insert_id' => $connection->lastInsertId(),
+			],
+			'meta' => [
+				'method' => $requestMethod,
+				'type' => 'db_write',
+				'database' => $databaseProfile,
+			],
+		];
+	}
+
+	private function runDatabaseExecute(string $actionName, string $requestMethod, array $params): array
+	{
+		$databaseProfile = $this->resolveDatabaseProfile($params['database'] ?? null);
+		$sql = $this->normalizeSqlForExecute((string) ($params['sql'] ?? ''));
+		$bindings = is_array($params['bindings'] ?? null) ? $params['bindings'] : [];
+		$maxRows = (int) ($params['max_rows'] ?? 500);
+		$allRowsets = (bool) ($params['all_rowsets'] ?? true);
+
+		$connection = $this->databaseManager->connection($databaseProfile);
+		$data = $this->executeGenericSql($connection, $sql, $bindings, $maxRows, $allRowsets);
+
+		return [
+			'action' => $actionName,
+			'data' => $data + [
+				'database_profile' => $databaseProfile,
+			],
+			'meta' => [
+				'method' => $requestMethod,
+				'type' => 'db_execute',
+				'database' => $databaseProfile,
+			],
+		];
+	}
+
 	private function runSQLAction(string $actionName, string $requestMethod, array $action, array $params): array
 	{
-		$databaseName = (string) ($action['database'] ?? '');
+		$databaseName = $this->resolveDatabaseProfile($action['database'] ?? null);
 
-		if ($databaseName === '') {
+		if (trim($databaseName) === '') {
 			throw new HTTPException(500, 'DATABASE_PROFILE_MISSING', 'SQL action is missing a database profile.', [
 				'action' => $actionName,
 			]);
@@ -136,6 +320,20 @@ final class APIActionRunner
 				'params' => $params,
 			],
 		];
+	}
+
+	private function resolveDatabaseProfile(mixed $candidate): string
+	{
+		if (is_string($candidate) && trim($candidate) !== '') {
+			return trim($candidate);
+		}
+
+		$defaultProfile = trim((string) $this->config->app('default_database_profile', 'private_mysql'));
+		if ($defaultProfile === '') {
+			throw new HTTPException(500, 'DATABASE_PROFILE_DEFAULT_MISSING', 'No default database profile is configured.');
+		}
+
+		return $defaultProfile;
 	}
 
 	private function normalizeParams(array $rules, array $input): array
@@ -182,6 +380,35 @@ final class APIActionRunner
 		return $normalized;
 	}
 
+	private function normalizeMap(string $name, mixed $value): array
+	{
+		if (!is_array($value) || array_is_list($value)) {
+			throw new HTTPException(422, 'VALIDATION_OBJECT_REQUIRED', sprintf('Parameter "%s" must be an object.', $name), [
+				'parameter' => $name,
+			]);
+		}
+
+		$normalized = [];
+		foreach ($value as $key => $item) {
+			if (!is_string($key) || $key === '') {
+				throw new HTTPException(422, 'VALIDATION_OBJECT_KEY_INVALID', sprintf('Parameter "%s" has an invalid key.', $name), [
+					'parameter' => $name,
+				]);
+			}
+
+			if (!is_scalar($item) && $item !== null) {
+				throw new HTTPException(422, 'VALIDATION_OBJECT_VALUE_INVALID', sprintf('Parameter "%s" has an invalid value type.', $name), [
+					'parameter' => $name,
+					'key' => $key,
+				]);
+			}
+
+			$normalized[$key] = $item;
+		}
+
+		return $normalized;
+	}
+
 	private function coerceValue(string $name, mixed $value, array $rule): mixed
 	{
 		$type = strtolower((string) ($rule['type'] ?? 'string'));
@@ -191,11 +418,212 @@ final class APIActionRunner
 			'float' => $this->normalizeFloat($name, $value, $rule),
 			'bool', 'boolean' => $this->normalizeBool($name, $value),
 			'string' => $this->normalizeString($name, $value, $rule),
+			'map', 'object' => $this->normalizeMap($name, $value),
 			default => throw new HTTPException(500, 'PARAMETER_TYPE_UNSUPPORTED', sprintf('Unsupported parameter type "%s".', $type), [
 				'parameter' => $name,
 				'type' => $type,
 			]),
 		};
+	}
+
+	private function bindNamedParameters(PDOStatement $statement, array $bindings): void
+	{
+		foreach ($bindings as $name => $value) {
+			if (!is_string($name) || $name === '') {
+				throw new HTTPException(422, 'VALIDATION_BINDING_NAME_INVALID', 'SQL binding names must be non-empty strings.');
+			}
+
+			$parameter = ltrim($name, ':');
+			if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $parameter) !== 1) {
+				throw new HTTPException(422, 'VALIDATION_BINDING_NAME_INVALID', sprintf('SQL binding name "%s" is invalid.', $name), [
+					'binding' => $name,
+				]);
+			}
+
+			if (!is_scalar($value) && $value !== null) {
+				throw new HTTPException(422, 'VALIDATION_BINDING_VALUE_INVALID', sprintf('SQL binding "%s" must be a scalar or null.', $name), [
+					'binding' => $name,
+				]);
+			}
+
+			$statement->bindValue(':' . $parameter, $value, $this->pdoTypeFor($value));
+		}
+	}
+
+	private function normalizeSql(string $sql): string
+	{
+		$normalized = trim($sql);
+
+		if ($normalized === '') {
+			throw new HTTPException(422, 'VALIDATION_SQL_REQUIRED', 'SQL must be provided.');
+		}
+
+		if (str_ends_with($normalized, ';')) {
+			$normalized = rtrim(substr($normalized, 0, -1));
+		}
+
+		if ($normalized === '' || str_contains($normalized, ';')) {
+			throw new HTTPException(422, 'VALIDATION_SQL_MULTISTATEMENT_DENIED', 'Exactly one SQL statement is allowed.');
+		}
+
+		return $normalized;
+	}
+
+	private function normalizeSqlForExecute(string $sql): string
+	{
+		$normalized = trim($sql);
+
+		if ($normalized === '') {
+			throw new HTTPException(422, 'VALIDATION_SQL_REQUIRED', 'SQL must be provided.');
+		}
+
+		if (preg_match('/[\x00]/', $normalized) === 1) {
+			throw new HTTPException(422, 'VALIDATION_SQL_INVALID', 'SQL contains an invalid null byte.');
+		}
+
+		return $normalized;
+	}
+
+	private function executeGenericSql(PDO $connection, string $sql, array $bindings, int $maxRows, bool $allRowsets): array
+	{
+		if ($bindings !== []) {
+			$statement = $connection->prepare($sql);
+			$this->bindNamedParameters($statement, $bindings);
+			$statement->execute();
+
+			return $this->collectStatementResult($statement, $maxRows, $allRowsets);
+		}
+
+		try {
+			$statement = $connection->prepare($sql);
+			$statement->execute();
+
+			return $this->collectStatementResult($statement, $maxRows, $allRowsets);
+		} catch (Throwable $prepareException) {
+			$affectedRows = $connection->exec($sql);
+			if ($affectedRows === false) {
+				throw $prepareException;
+			}
+
+			return [
+				'result_sets' => [],
+				'result_set_count' => 0,
+				'row_count' => 0,
+				'affected_rows' => $affectedRows,
+				'truncated' => false,
+				'max_rows' => $maxRows,
+			];
+		}
+	}
+
+	private function collectStatementResult(PDOStatement $statement, int $maxRows, bool $allRowsets): array
+	{
+		$resultSets = [];
+		$totalRows = 0;
+		$truncated = false;
+		$index = 0;
+		$affectedRows = $statement->rowCount();
+
+		do {
+			$columnCount = $statement->columnCount();
+			if ($columnCount > 0) {
+				$rows = $statement->fetchAll();
+				$rowCount = count($rows);
+				$rowSetTruncated = false;
+				if ($rowCount > $maxRows) {
+					$rows = array_slice($rows, 0, $maxRows);
+					$rowCount = $maxRows;
+					$rowSetTruncated = true;
+					$truncated = true;
+				}
+
+				$totalRows += $rowCount;
+				$resultSets[] = [
+					'index' => $index,
+					'column_count' => $columnCount,
+					'row_count' => $rowCount,
+					'truncated' => $rowSetTruncated,
+					'rows' => $rows,
+				];
+			}
+
+			$index++;
+		} while ($allRowsets && $statement->nextRowset());
+
+		return [
+			'result_sets' => $resultSets,
+			'result_set_count' => count($resultSets),
+			'row_count' => $totalRows,
+			'affected_rows' => $affectedRows,
+			'truncated' => $truncated,
+			'max_rows' => $maxRows,
+		];
+	}
+
+	private function assertReadOnlyQuery(string $sql): void
+	{
+		$keyword = $this->firstSqlKeyword($sql);
+		$allowed = ['select', 'show', 'describe', 'desc', 'explain', 'with'];
+
+		if (!in_array($keyword, $allowed, true)) {
+			throw new HTTPException(422, 'DB_READ_ONLY_QUERY_REQUIRED', 'DB.READ only allows read-only SQL statements.', [
+				'keyword' => $keyword,
+			]);
+		}
+
+		if ($keyword === 'with' && preg_match('/\b(insert|update|delete|replace|alter|drop|create|truncate)\b/i', $sql) === 1) {
+			throw new HTTPException(422, 'DB_READ_ONLY_QUERY_REQUIRED', 'DB.READ CTE query appears to contain a write operation.');
+		}
+
+		if (preg_match('/\binto\s+outfile\b/i', $sql) === 1) {
+			throw new HTTPException(422, 'DB_READ_ONLY_QUERY_REQUIRED', 'DB.READ does not allow INTO OUTFILE.');
+		}
+	}
+
+	private function assertWriteQuery(string $sql): void
+	{
+		$keyword = $this->firstSqlKeyword($sql);
+		$allowed = ['insert', 'update', 'delete', 'replace'];
+
+		if (!in_array($keyword, $allowed, true)) {
+			throw new HTTPException(422, 'DB_WRITE_QUERY_REQUIRED', 'DB.WRITE only allows INSERT, UPDATE, DELETE, or REPLACE.', [
+				'keyword' => $keyword,
+			]);
+		}
+	}
+
+	private function firstSqlKeyword(string $sql): string
+	{
+		if (preg_match('/^\s*([A-Za-z_]+)/', $sql, $matches) !== 1) {
+			throw new HTTPException(422, 'VALIDATION_SQL_REQUIRED', 'SQL must start with a statement keyword.');
+		}
+
+		return strtolower((string) ($matches[1] ?? ''));
+	}
+
+	private function assertMySqlDriver(PDO $connection, string $actionName): void
+	{
+		$driver = strtolower((string) $connection->getAttribute(PDO::ATTR_DRIVER_NAME));
+		if ($driver !== 'mysql') {
+			throw new HTTPException(422, 'DB_METADATA_DRIVER_UNSUPPORTED', sprintf('%s currently supports MySQL/MariaDB only.', $actionName), [
+				'driver' => $driver,
+				'action' => $actionName,
+			]);
+		}
+	}
+
+	private function resolveSchemaName(PDO $connection, mixed $configuredSchema): string
+	{
+		if (is_string($configuredSchema) && trim($configuredSchema) !== '') {
+			return trim($configuredSchema);
+		}
+
+		$currentDatabase = $connection->query('SELECT DATABASE()')->fetchColumn();
+		if (!is_string($currentDatabase) || trim($currentDatabase) === '') {
+			throw new HTTPException(422, 'DB_SCHEMA_UNRESOLVED', 'Could not resolve current schema name. Provide params.schema explicitly.');
+		}
+
+		return trim($currentDatabase);
 	}
 
 	private function normalizeInt(string $name, mixed $value, array $rule): int

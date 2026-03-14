@@ -1,0 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+	'client_defaults' => [
+		'scopes' => ['db.read'],
+	],
+	'clients' => [
+		'DESKTOP001' => [
+			'display_name' => 'Desktop Client 001',
+			'secret_hash' => 'paste_password_hash_here',
+		],
+		'DESKTOP002' => [
+			'display_name' => 'Desktop Client 002',
+			'secret_hash' => 'paste_password_hash_here',
+			'scopes' => ['db.read', 'db.write'],
+		],
+		'CRITERION' => [
+			'display_name' => 'Criterion Super User',
+			'secret_hash' => 'paste_password_hash_here',
+			'scopes' => ['db.read', 'db.write', 'db.admin'],
+		],
+	],
+];

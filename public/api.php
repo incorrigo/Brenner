@@ -37,7 +37,7 @@ try {
 	$runner = new APIActionRunner(
 		$config,
 		new DatabaseManager($config->databases()),
-		new ClientCredentialStore($config->auth('clients', [])),
+		new ClientCredentialStore($config->auth()),
 		$guidStore
 	);
 

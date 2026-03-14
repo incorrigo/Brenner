@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+	'private_mysql' => [
+		'database' => 'light-house',
+		'username' => 'api001',
+		'password' => 'paste_real_password_here',
+	],
+	'private_mysql_reporting' => [
+		'database' => 'light-house-reporting',
+		'username' => 'api002',
+		'password' => 'paste_real_password_here',
+	],
+];

@@ -4,19 +4,22 @@ declare(strict_types=1);
 
 return [
 	/*
-	 * Fixed MySQL/MariaDB profile for hosted systems where the database is
-	 * available as localhost:3306 from the website's PHP runtime.
-	 *
-	 * Put the real database name, username, and password in
-	 * config/databases.local.php so they stay out of Git.
+	 * Shared defaults applied to every DB profile unless overridden in that profile.
+	 * Keep shared host/port/driver here so each profile only needs database/user/password.
 	 */
-	'private_mysql' => [
+	'_defaults' => [
 		'driver' => 'mysql',
 		'host' => 'localhost',
 		'port' => 3306,
+		'charset' => 'utf8mb4',
+	],
+
+	/*
+	 * Add one of these for every database you want to access
+	 */
+	'private_mysql' => [
 		'database' => '',
 		'username' => '',
 		'password' => '',
-		'charset' => 'utf8mb4',
 	],
 ];

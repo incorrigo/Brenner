@@ -84,6 +84,157 @@ return [
 		],
 	],
 
+	'DB.PROFILES' => [
+		'type' => 'db_profiles',
+		'methods' => ['POST'],
+		'consume_guid' => false,
+		'scopes' => ['db.read'],
+		'description' => 'List configured database profiles this gateway can access.',
+	],
+
+	'DB.TABLES' => [
+		'type' => 'db_tables',
+		'methods' => ['POST'],
+		'consume_guid' => false,
+		'scopes' => ['db.read'],
+		'description' => 'List table names in the selected schema (MySQL/MariaDB).',
+		'params' => [
+			'database' => [
+				'type' => 'string',
+				'nullable' => true,
+				'min_length' => 1,
+				'max_length' => 100,
+			],
+			'schema' => [
+				'type' => 'string',
+				'nullable' => true,
+				'max_length' => 128,
+			],
+		],
+	],
+
+	'DB.COLUMNS' => [
+		'type' => 'db_columns',
+		'methods' => ['POST'],
+		'consume_guid' => false,
+		'scopes' => ['db.read'],
+		'description' => 'List column metadata for one table (MySQL/MariaDB).',
+		'params' => [
+			'database' => [
+				'type' => 'string',
+				'nullable' => true,
+				'min_length' => 1,
+				'max_length' => 100,
+			],
+			'schema' => [
+				'type' => 'string',
+				'nullable' => true,
+				'max_length' => 128,
+			],
+			'table' => [
+				'type' => 'string',
+				'required' => true,
+				'min_length' => 1,
+				'max_length' => 128,
+			],
+		],
+	],
+
+	'DB.READ' => [
+		'type' => 'db_read',
+		'methods' => ['POST'],
+		'consume_guid' => false,
+		'scopes' => ['db.read'],
+		'description' => 'Execute one read-only SQL statement against the selected profile.',
+		'params' => [
+			'database' => [
+				'type' => 'string',
+				'nullable' => true,
+				'min_length' => 1,
+				'max_length' => 100,
+			],
+			'sql' => [
+				'type' => 'string',
+				'required' => true,
+				'min_length' => 1,
+				'max_length' => 12000,
+			],
+			'bindings' => [
+				'type' => 'map',
+				'default' => [],
+			],
+			'max_rows' => [
+				'type' => 'int',
+				'default' => 500,
+				'min' => 1,
+				'max' => 5000,
+			],
+		],
+	],
+
+	'DB.WRITE' => [
+		'type' => 'db_write',
+		'methods' => ['POST'],
+		'consume_guid' => true,
+		'scopes' => ['db.write'],
+		'description' => 'Execute one write SQL statement against the selected profile.',
+		'params' => [
+			'database' => [
+				'type' => 'string',
+				'nullable' => true,
+				'min_length' => 1,
+				'max_length' => 100,
+			],
+			'sql' => [
+				'type' => 'string',
+				'required' => true,
+				'min_length' => 1,
+				'max_length' => 12000,
+			],
+			'bindings' => [
+				'type' => 'map',
+				'default' => [],
+			],
+		],
+	],
+
+	'DB.EXECUTE' => [
+		'type' => 'db_execute',
+		'methods' => ['POST'],
+		'consume_guid' => true,
+		'scopes' => ['db.admin'],
+		'description' => 'Execute SQL with full DB-user privileges (data + structure + routines/events/triggers).',
+		'params' => [
+			'database' => [
+				'type' => 'string',
+				'nullable' => true,
+				'min_length' => 1,
+				'max_length' => 100,
+			],
+			'sql' => [
+				'type' => 'string',
+				'required' => true,
+				'min_length' => 1,
+				'max_length' => 120000,
+				'trim' => false,
+			],
+			'bindings' => [
+				'type' => 'map',
+				'default' => [],
+			],
+			'max_rows' => [
+				'type' => 'int',
+				'default' => 500,
+				'min' => 1,
+				'max' => 10000,
+			],
+			'all_rowsets' => [
+				'type' => 'bool',
+				'default' => true,
+			],
+		],
+	],
+
 	/*
 	 * Example SQL read action:
 	 *

@@ -10,11 +10,14 @@ use RuntimeException;
 
 final class DatabaseManager
 {
+	private array $profileDefaults;
 	private array $profiles;
 	private array $connections = [];
 
 	public function __construct(array $profiles)
 	{
+		$this->profileDefaults = is_array($profiles['_defaults'] ?? null) ? $profiles['_defaults'] : [];
+		unset($profiles['_defaults']);
 		$this->profiles = $profiles;
 	}
 
@@ -33,6 +36,7 @@ final class DatabaseManager
 
 	private function createConnection(array $profile): PDO
 	{
+		$profile = array_replace($this->profileDefaults, $profile);
 		$driver = strtolower((string) ($profile['driver'] ?? ''));
 		$username = $profile['username'] ?? null;
 		$password = $profile['password'] ?? null;

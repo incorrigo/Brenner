@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -18,10 +17,11 @@ public sealed class HTTPSAPIGatewayClient : IDisposable {
 	private static readonly JsonSerializerOptions JSON_OPTIONS = new(JsonSerializerDefaults.Web) {
 		PropertyNameCaseInsensitive = true,
 		WriteIndented = true,
+		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
 	};
 
 	private readonly HTTPClient _httpClient;
-	private APILinkSessionDTO? _currentSession;
+	private APIGUIDStateDTO? _currentGUIDState;
 
 	public HTTPSAPIGatewayClient(Uri baseAddress) {
 		if (baseAddress.Scheme != Uri.UriSchemeHttps) {
@@ -35,7 +35,7 @@ public sealed class HTTPSAPIGatewayClient : IDisposable {
 	}
 
 	public Task<SystemStatusDTO> GetSYSTEMSTATUSAsync(CancellationToken cancellationToken = default) {
-		return SendActionAsync<SystemStatusDTO>("SYSTEM.STATUS", null, requiresLink: false, cancellationToken);
+		return SendActionAsync<SystemStatusDTO>("SYSTEM.STATUS", null, requiresGUID: false, cancellationToken);
 	}
 
 	public async Task<AUTHOpenLinkDataDTO> OpenLINKAsync(string clientID, string clientSecret, CancellationToken cancellationToken = default) {
@@ -45,59 +45,48 @@ public sealed class HTTPSAPIGatewayClient : IDisposable {
 				ClientID = clientID,
 				ClientSecret = clientSecret,
 			},
-			requiresLink: false,
+			requiresGUID: false,
 			cancellationToken
 		);
 
-		if (_currentSession is null) {
-			throw new InvalidOperationException("Gateway did not return a session after AUTH.OPEN_LINK.");
+		if (_currentGUIDState is null) {
+			throw new InvalidOperationException("Gateway did not return a GUID after AUTH.OPEN_LINK.");
 		}
 
 		return response;
 	}
 
-	public Task<LINKPingDataDTO> PingLINKAsync(CancellationToken cancellationToken = default) {
-		return SendActionAsync<LINKPingDataDTO>("LINK.PING", null, requiresLink: true, cancellationToken);
-	}
-
-	public Task<List<UserRecordDTO>> GetUSERSLISTAsync(int limit, CancellationToken cancellationToken = default) {
-		return SendActionAsync<List<UserRecordDTO>>(
-			"USERS.LIST",
-			new USERSListParamsDTO {
-				Limit = limit,
+	public Task<LINKEchoDataDTO> EchoLINKAsync(string nonce, CancellationToken cancellationToken = default) {
+		return SendActionAsync<LINKEchoDataDTO>(
+			"LINK.ECHO",
+			new LINKEchoParamsDTO {
+				Nonce = nonce,
 			},
-			requiresLink: true,
+			requiresGUID: true,
 			cancellationToken
 		);
 	}
 
-	public Task<UserRecordDTO?> GetUSERBYIDAsync(int id, CancellationToken cancellationToken = default) {
-		return SendActionAsync<UserRecordDTO?>(
-			"USER.BY_ID",
-			new USERByIDParamsDTO {
-				ID = id,
-			},
-			requiresLink: true,
-			cancellationToken
-		);
+	public Task<LINKInfoDataDTO> GetLINKINFOAsync(CancellationToken cancellationToken = default) {
+		return SendActionAsync<LINKInfoDataDTO>("LINK.INFO", null, requiresGUID: true, cancellationToken);
 	}
 
-	private async Task<T> SendActionAsync<T>(string action, object? parameters, bool requiresLink, CancellationToken cancellationToken) {
-		var sessionSnapshot = requiresLink
-			? CloneSession(_currentSession ?? throw new InvalidOperationException("Call OpenLINKAsync before sending authenticated actions."))
+	private async Task<T> SendActionAsync<T>(string action, object? parameters, bool requiresGUID, CancellationToken cancellationToken) {
+		var guidSnapshot = requiresGUID
+			? _currentGUIDState?.GUID ?? throw new InvalidOperationException("Call OpenLINKAsync before sending authenticated actions.")
 			: null;
 
 		var envelope = new APIRequestEnvelopeDTO {
 			Action = action,
 			Params = parameters,
-			Session = sessionSnapshot,
+			GUID = guidSnapshot,
 		};
 
 		try {
 			return await SendEnvelopeCoreAsync<T>(envelope, cancellationToken);
-		} catch (HttpRequestException) when (sessionSnapshot is not null) {
+		} catch (HttpRequestException) when (guidSnapshot is not null) {
 			return await SendEnvelopeCoreAsync<T>(envelope, cancellationToken);
-		} catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested && sessionSnapshot is not null) {
+		} catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested && guidSnapshot is not null) {
 			return await SendEnvelopeCoreAsync<T>(envelope, cancellationToken);
 		}
 	}
@@ -115,8 +104,9 @@ public sealed class HTTPSAPIGatewayClient : IDisposable {
 			throw new InvalidOperationException("API response could not be deserialized.");
 		}
 
-		if (apiResponse.Session is not null) {
-			_currentSession = apiResponse.Session;
+		var guidState = ExtractGUIDState(apiResponse);
+		if (guidState is not null) {
+			_currentGUIDState = guidState;
 		}
 
 		if (!response.IsSuccessStatusCode || !apiResponse.OK) {
@@ -130,12 +120,21 @@ public sealed class HTTPSAPIGatewayClient : IDisposable {
 		return apiResponse.Data!;
 	}
 
-	private static APILinkSessionDTO CloneSession(APILinkSessionDTO session) => new() {
-		SessionID = session.SessionID,
-		CommandGUID = session.CommandGUID,
-		Sequence = session.Sequence,
-		ExpiresAt = session.ExpiresAt,
-	};
+	private static APIGUIDStateDTO? ExtractGUIDState<T>(APIResponseEnvelopeDTO<T> apiResponse) {
+		if (string.IsNullOrWhiteSpace(apiResponse.GUID)) {
+			return null;
+		}
+
+		if (apiResponse.GUIDSequence is null || string.IsNullOrWhiteSpace(apiResponse.GUIDExpiresAt)) {
+			throw new InvalidOperationException("API response returned an incomplete GUID state.");
+		}
+
+		return new APIGUIDStateDTO {
+			GUID = apiResponse.GUID,
+			GUIDSequence = apiResponse.GUIDSequence.Value,
+			GUIDExpiresAt = apiResponse.GUIDExpiresAt,
+		};
+	}
 
 	public void Dispose() {
 		_httpClient.Dispose();
@@ -161,8 +160,8 @@ public sealed class APIRequestEnvelopeDTO {
 	[JsonPropertyName("params")]
 	public object? Params { get; init; }
 
-	[JsonPropertyName("session")]
-	public APILinkSessionDTO? Session { get; init; }
+	[JsonPropertyName("guid")]
+	public string? GUID { get; init; }
 }
 
 public sealed class APIResponseEnvelopeDTO<T> {
@@ -178,8 +177,14 @@ public sealed class APIResponseEnvelopeDTO<T> {
 	[JsonPropertyName("data")]
 	public T? Data { get; init; }
 
-	[JsonPropertyName("session")]
-	public APILinkSessionDTO? Session { get; init; }
+	[JsonPropertyName("guid")]
+	public string? GUID { get; init; }
+
+	[JsonPropertyName("guid_sequence")]
+	public int? GUIDSequence { get; init; }
+
+	[JsonPropertyName("guid_expires_at")]
+	public string? GUIDExpiresAt { get; init; }
 
 	[JsonPropertyName("error")]
 	public APIErrorDTO? Error { get; init; }
@@ -193,18 +198,12 @@ public sealed class APIErrorDTO {
 	public string? Message { get; init; }
 }
 
-public sealed class APILinkSessionDTO {
-	[JsonPropertyName("session_id")]
-	public required string SessionID { get; init; }
+public sealed class APIGUIDStateDTO {
+	public required string GUID { get; init; }
 
-	[JsonPropertyName("command_guid")]
-	public required string CommandGUID { get; init; }
+	public int GUIDSequence { get; init; }
 
-	[JsonPropertyName("sequence")]
-	public int Sequence { get; init; }
-
-	[JsonPropertyName("expires_at")]
-	public required string ExpiresAt { get; init; }
+	public required string GUIDExpiresAt { get; init; }
 }
 
 public sealed class AUTHOpenLinkParamsDTO {
@@ -223,9 +222,25 @@ public sealed class AUTHOpenLinkDataDTO {
 	public string? DisplayName { get; init; }
 }
 
-public sealed class LINKPingDataDTO {
+public sealed class LINKEchoParamsDTO {
+	[JsonPropertyName("nonce")]
+	public required string Nonce { get; init; }
+}
+
+public sealed class LINKEchoDataDTO {
+	[JsonPropertyName("echo")]
+	public Dictionary<string, string>? Echo { get; init; }
+
+	[JsonPropertyName("message")]
+	public string? Message { get; init; }
+}
+
+public sealed class LINKInfoDataDTO {
 	[JsonPropertyName("authenticated")]
 	public bool Authenticated { get; init; }
+
+	[JsonPropertyName("mode")]
+	public string? Mode { get; init; }
 
 	[JsonPropertyName("message")]
 	public string? Message { get; init; }
@@ -245,27 +260,6 @@ public sealed class SystemStatusDTO {
 	public string? Authentication { get; init; }
 }
 
-public sealed class USERSListParamsDTO {
-	[JsonPropertyName("limit")]
-	public int Limit { get; init; }
-}
-
-public sealed class USERByIDParamsDTO {
-	[JsonPropertyName("id")]
-	public int ID { get; init; }
-}
-
-public sealed class UserRecordDTO {
-	[JsonPropertyName("id")]
-	public int ID { get; init; }
-
-	[JsonPropertyName("name")]
-	public string? Name { get; init; }
-
-	[JsonPropertyName("email")]
-	public string? Email { get; init; }
-}
-
 public static class Program {
 	public static async Task Main() {
 		using var apiClient = new HTTPSAPIGatewayClient(new Uri("https://lh.incorrigo.co.uk/"));
@@ -276,13 +270,10 @@ public static class Program {
 		var link = await apiClient.OpenLINKAsync("DESKTOP001", "your-client-secret");
 		Console.WriteLine($"LINK OPENED: {link.Opened}");
 
-		var ping = await apiClient.PingLINKAsync();
-		Console.WriteLine($"PING: {ping.Message}");
+		var echo = await apiClient.EchoLINKAsync("retry-me");
+		Console.WriteLine($"ECHO: {echo.Message}");
 
-		var users = await apiClient.GetUSERSLISTAsync(10);
-		Console.WriteLine($"USERS RETURNED: {users.Count}");
-
-		var user = await apiClient.GetUSERBYIDAsync(4);
-		Console.WriteLine($"USER: {user?.Name}");
+		var info = await apiClient.GetLINKINFOAsync();
+		Console.WriteLine($"INFO: {info.Message} ({info.Mode})");
 	}
 }

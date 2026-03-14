@@ -7,7 +7,7 @@ return [
 		'type' => 'session_open',
 		'methods' => ['POST'],
 		'requires_auth' => false,
-		'description' => 'Exchange client credentials for a rotating single-use command GUID.',
+		'description' => 'Exchange client credentials for the first rotating GUID.',
 		'params' => [
 			'client_id' => [
 				'type' => 'string',
@@ -29,28 +29,19 @@ return [
 		'type' => 'static',
 		'methods' => ['POST'],
 		'requires_auth' => false,
-		'description' => 'Health check for desktop clients.',
+		'description' => 'Describe the HTTPS transport and GUID-authentication model.',
 		'payload' => [
 			'online' => true,
 			'message' => 'Gateway is running.',
 			'transport' => 'HTTPS',
-			'authentication' => 'Rotating single-use command GUID',
-		],
-	],
-
-	'LINK.PING' => [
-		'type' => 'static',
-		'methods' => ['POST'],
-		'description' => 'Authenticated protocol probe that does not depend on your database schema.',
-		'payload' => [
-			'authenticated' => true,
-			'message' => 'Rotating link is alive.',
+			'authentication' => 'Rotating GUID with selective consumption',
 		],
 	],
 
 	'LINK.ECHO' => [
 		'type' => 'echo',
 		'methods' => ['POST'],
+		'consume_guid' => true,
 		'description' => 'Authenticated echo action used for replay and retry testing.',
 		'params' => [
 			'nonce' => [
@@ -62,56 +53,71 @@ return [
 		],
 	],
 
-	'USERS.LIST' => [
-		'type' => 'sql',
-		'database' => 'private_mysql',
+	'LINK.INFO' => [
+		'type' => 'static',
 		'methods' => ['POST'],
-		'scopes' => ['users.read'],
-		'description' => 'Example read query for a desktop client. Replace the table and columns with your schema.',
-		'sql' => 'SELECT id, name, email FROM users ORDER BY id DESC LIMIT :limit',
-		'result' => 'all',
-		'params' => [
-			'limit' => [
-				'type' => 'int',
-				'default' => 25,
-				'min' => 1,
-				'max' => 100,
-			],
+		'consume_guid' => false,
+		'description' => 'Authenticated, schema-free read probe. Reuses the current GUID.',
+		'payload' => [
+			'authenticated' => true,
+			'mode' => 'guid-reuse',
+			'message' => 'Authenticated non-consuming action succeeded.',
 		],
 	],
 
-	'USER.BY_ID' => [
-		'type' => 'sql',
-		'database' => 'private_mysql',
+	'LINK.REQUIRE_TAG' => [
+		'type' => 'static',
 		'methods' => ['POST'],
-		'scopes' => ['users.read'],
-		'description' => 'Example single-record lookup for a desktop client. Replace the table and columns with your schema.',
-		'sql' => 'SELECT id, name, email FROM users WHERE id = :id LIMIT 1',
-		'result' => 'one',
+		'consume_guid' => false,
+		'description' => 'Authenticated validation probe requiring a non-empty tag. Reuses the current GUID.',
 		'params' => [
-			'id' => [
-				'type' => 'int',
+			'tag' => [
+				'type' => 'string',
 				'required' => true,
-				'min' => 1,
+				'min_length' => 1,
+				'max_length' => 64,
 			],
+		],
+		'payload' => [
+			'accepted' => true,
+			'message' => 'Required tag accepted.',
 		],
 	],
 
 	/*
-	 * Example write action:
+	 * Example SQL read action:
 	 *
-	 * 'USER.CREATE' => [
+	 * 'DB.EXAMPLE_READ' => [
 	 *     'type' => 'sql',
 	 *     'database' => 'private_mysql',
 	 *     'methods' => ['POST'],
-	 *     'scopes' => ['users.write'],
-	 *     'description' => 'Insert a new user.',
-	 *     'sql' => 'INSERT INTO users (name, email) VALUES (:name, :email)',
-	 *     'result' => 'write',
+	 *     'scopes' => ['db.read'],
+	 *     'consume_guid' => false,
+	 *     'description' => 'Read rows from your real schema.',
+	 *     'sql' => 'SELECT id, title FROM your_table ORDER BY id DESC LIMIT :limit',
+	 *     'result' => 'all',
 	 *     'params' => [
-	 *         'name' => ['type' => 'string', 'required' => true, 'max_length' => 100],
-	 *         'email' => ['type' => 'string', 'required' => true, 'max_length' => 190],
+	 *         'limit' => ['type' => 'int', 'default' => 25, 'min' => 1, 'max' => 100],
 	 *     ],
 	 * ],
+	 *
+	 * Example SQL write action:
+	 *
+	 * 'DB.EXAMPLE_WRITE' => [
+	 *     'type' => 'sql',
+	 *     'database' => 'private_mysql',
+	 *     'methods' => ['POST'],
+	 *     'scopes' => ['db.write'],
+	 *     'consume_guid' => true,
+	 *     'description' => 'Insert into your real schema.',
+	 *     'sql' => 'INSERT INTO your_table (title) VALUES (:title)',
+	 *     'result' => 'write',
+	 *     'params' => [
+	 *         'title' => ['type' => 'string', 'required' => true, 'max_length' => 190],
+	 *     ],
+	 * ],
+	 *
+	 * SQL actions with 'result' => 'write' consume and rotate the GUID by default,
+	 * even when 'consume_guid' is omitted.
 	 */
 ];

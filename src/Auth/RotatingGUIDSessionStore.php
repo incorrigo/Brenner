@@ -22,105 +22,131 @@ final class RotatingGUIDSessionStore
 	{
 		$this->ensureStoragePathExists();
 
-		$sessionID = $this->generateGUID();
-		$commandGUID = $this->generateGUID();
+		$guid = $this->generateGUID();
+		$guidHash = $this->hashGUID($guid);
 		$timestamp = time();
 		$record = [
-			'session_id' => $sessionID,
+			'record_type' => 'active',
 			'client_id' => $clientID,
 			'scopes' => array_values(array_filter($scopes, 'is_string')),
 			'sequence' => 0,
-			'current_command_hash' => $this->hashValue($commandGUID),
-			'previous_command_hash' => null,
-			'last_request_hash' => null,
-			'last_response' => null,
+			'guid_hash' => $guidHash,
+			'last_spent_guid_hash' => null,
 			'created_at' => $timestamp,
 			'updated_at' => $timestamp,
 			'expires_at' => $timestamp + $this->sessionTTLSeconds,
 		];
 
-		$result = file_put_contents($this->sessionFilePath($sessionID), json_encode($record, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
+		$this->writeRecordToPath($this->guidFilePath($guidHash), $record);
 
-		if ($result === false) {
-			throw new RuntimeException('Unable to create a session file.');
-		}
-
-		return $this->buildSessionPayload($record, $commandGUID);
+		return $this->buildGUIDPayload($guid, (int) $record['sequence'], (int) $record['expires_at']);
 	}
 
-	public function execute(string $sessionID, string $commandGUID, string $requestHash, callable $operation): array
+	public function execute(string $guid, bool $consumeGUID, ?string $requestHash, callable $operation): array
 	{
 		$this->ensureStoragePathExists();
 
-		$sessionPath = $this->sessionFilePath($sessionID);
+		$guidHash = $this->hashGUID($guid);
+		$guidPath = $this->guidFilePath($guidHash);
 
-		if (!is_file($sessionPath)) {
-			throw new HTTPException(401, 'AUTH_SESSION_UNKNOWN', 'Session is invalid or expired.');
+		if (!is_file($guidPath)) {
+			throw new HTTPException(401, 'AUTH_GUID_INVALID', 'GUID is invalid or expired.');
 		}
 
-		$handle = fopen($sessionPath, 'c+');
+		$handle = fopen($guidPath, 'c+');
 
 		if ($handle === false) {
-			throw new RuntimeException('Unable to open the session file.');
+			throw new RuntimeException('Unable to open the GUID record file.');
 		}
 
-		$deleteSessionPath = false;
+		$deleteCurrentGUIDPath = false;
+		$deletePriorSpentGUIDPath = null;
 
 		try {
 			if (!flock($handle, LOCK_EX)) {
-				throw new RuntimeException('Unable to lock the session file.');
+				throw new RuntimeException('Unable to lock the GUID record file.');
 			}
 
-			$record = $this->readRecord($handle, $sessionID);
+			$record = $this->readRecord($handle, $guidHash);
 
 			if ((int) ($record['expires_at'] ?? 0) < time()) {
-				$deleteSessionPath = true;
-				throw new HTTPException(401, 'AUTH_SESSION_EXPIRED', 'Session has expired.');
+				$deleteCurrentGUIDPath = true;
+				throw new HTTPException(401, 'AUTH_GUID_EXPIRED', 'GUID has expired.');
 			}
 
-			$commandHash = $this->hashValue($commandGUID);
-			$currentHash = (string) ($record['current_command_hash'] ?? '');
-			$previousHash = (string) ($record['previous_command_hash'] ?? '');
-
-			if ($previousHash !== '' && hash_equals($previousHash, $commandHash)) {
+			if (($record['record_type'] ?? '') === 'spent') {
 				$lastResponse = $record['last_response'] ?? null;
 				$lastRequestHash = (string) ($record['last_request_hash'] ?? '');
 
-				if ($lastRequestHash === $requestHash && is_array($lastResponse)) {
+				if (is_string($requestHash) && $lastRequestHash === $requestHash && is_array($lastResponse)) {
 					return $lastResponse;
 				}
 
-				throw new HTTPException(409, 'AUTH_COMMAND_GUID_ALREADY_USED', 'Command GUID was already used.');
+				throw new HTTPException(409, 'AUTH_GUID_ALREADY_USED', 'GUID was already spent.');
 			}
 
-			if ($currentHash === '' || !hash_equals($currentHash, $commandHash)) {
-				throw new HTTPException(401, 'AUTH_COMMAND_GUID_INVALID', 'Command GUID is invalid.');
+			if (($record['record_type'] ?? '') !== 'active') {
+				throw new RuntimeException('GUID record type is invalid.');
 			}
 
-			$nextCommandGUID = $this->generateGUID();
-			$record['previous_command_hash'] = $currentHash;
-			$record['current_command_hash'] = $this->hashValue($nextCommandGUID);
-			$record['sequence'] = (int) ($record['sequence'] ?? 0) + 1;
-			$record['updated_at'] = time();
-			$record['expires_at'] = time() + $this->sessionTTLSeconds;
-
-			$sessionPayload = $this->buildSessionPayload($record, $nextCommandGUID);
+			$sequence = (int) ($record['sequence'] ?? 0);
+			$expiresAt = time() + $this->sessionTTLSeconds;
 			$clientContext = [
-				'session_id' => (string) $record['session_id'],
 				'client_id' => (string) ($record['client_id'] ?? ''),
 				'scopes' => array_values(array_filter($record['scopes'] ?? [], 'is_string')),
-				'sequence' => (int) $record['sequence'],
+				'sequence' => $sequence,
+				'consume_guid' => $consumeGUID,
 			];
 
-			$result = $operation($clientContext, $sessionPayload);
+			if ($consumeGUID) {
+				$nextGUID = $this->generateGUID();
+				$nextGUIDHash = $this->hashGUID($nextGUID);
+				$nextSequence = $sequence + 1;
+				$guidPayload = $this->buildGUIDPayload($nextGUID, $nextSequence, $expiresAt);
+				$result = $operation($clientContext, $guidPayload);
 
-			if (!is_array($result) || !isset($result['status_code'], $result['response']) || !is_array($result['response'])) {
-				throw new RuntimeException('Authenticated operation did not return the expected response envelope.');
+				$this->assertOperationResult($result);
+
+				$nextRecord = [
+					'record_type' => 'active',
+					'client_id' => $record['client_id'],
+					'scopes' => $record['scopes'],
+					'sequence' => $nextSequence,
+					'guid_hash' => $nextGUIDHash,
+					'last_spent_guid_hash' => $guidHash,
+					'created_at' => $record['created_at'],
+					'updated_at' => time(),
+					'expires_at' => $expiresAt,
+				];
+				$this->writeRecordToPath($this->guidFilePath($nextGUIDHash), $nextRecord);
+
+				$deletePriorSpentGUIDPath = is_string($record['last_spent_guid_hash'] ?? null)
+					? $this->guidFilePath((string) $record['last_spent_guid_hash'])
+					: null;
+
+				$spentRecord = [
+					'record_type' => 'spent',
+					'client_id' => $record['client_id'],
+					'scopes' => $record['scopes'],
+					'sequence' => $nextSequence,
+					'guid_hash' => $guidHash,
+					'last_request_hash' => $requestHash,
+					'last_response' => $result,
+					'created_at' => $record['created_at'],
+					'updated_at' => time(),
+					'expires_at' => $expiresAt,
+				];
+				$this->writeRecord($handle, $spentRecord);
+
+				return $result;
 			}
 
-			$result['response']['session'] = $sessionPayload;
-			$record['last_request_hash'] = $requestHash;
-			$record['last_response'] = $result;
+			$record['updated_at'] = time();
+			$record['expires_at'] = $expiresAt;
+			$guidPayload = $this->buildGUIDPayload($guid, $sequence, $expiresAt);
+			$result = $operation($clientContext, $guidPayload);
+
+			$this->assertOperationResult($result);
 			$this->writeRecord($handle, $record);
 
 			return $result;
@@ -130,8 +156,12 @@ final class RotatingGUIDSessionStore
 				fclose($handle);
 			}
 
-			if ($deleteSessionPath) {
-				@unlink($sessionPath);
+			if ($deleteCurrentGUIDPath) {
+				@unlink($guidPath);
+			}
+
+			if (is_string($deletePriorSpentGUIDPath) && is_file($deletePriorSpentGUIDPath)) {
+				@unlink($deletePriorSpentGUIDPath);
 			}
 		}
 	}
@@ -143,32 +173,32 @@ final class RotatingGUIDSessionStore
 		}
 
 		if (!mkdir($this->storagePath, 0775, true) && !is_dir($this->storagePath)) {
-			throw new RuntimeException(sprintf('Unable to create session storage path: %s', $this->storagePath));
+			throw new RuntimeException(sprintf('Unable to create GUID storage path: %s', $this->storagePath));
 		}
 	}
 
-	private function sessionFilePath(string $sessionID): string
+	private function guidFilePath(string $guidHash): string
 	{
-		if (preg_match('/^[a-f0-9-]{36}$/i', $sessionID) !== 1) {
-			throw new HTTPException(401, 'AUTH_SESSION_INVALID', 'Session ID format is invalid.');
+		if (preg_match('/^[a-f0-9]{64}$/', $guidHash) !== 1) {
+			throw new RuntimeException('GUID hash format is invalid.');
 		}
 
-		return rtrim($this->storagePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . strtolower($sessionID) . '.json';
+		return rtrim($this->storagePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $guidHash . '.json';
 	}
 
-	private function readRecord($handle, string $sessionID): array
+	private function readRecord($handle, string $guidHash): array
 	{
 		rewind($handle);
 		$json = stream_get_contents($handle);
 
 		if (!is_string($json) || trim($json) === '') {
-			throw new HTTPException(401, 'AUTH_SESSION_UNKNOWN', 'Session is invalid or expired.', ['session_id' => $sessionID]);
+			throw new HTTPException(401, 'AUTH_GUID_INVALID', 'GUID is invalid or expired.', ['guid_hash' => $guidHash]);
 		}
 
 		$data = json_decode($json, true);
 
 		if (!is_array($data)) {
-			throw new RuntimeException(sprintf('Session file for %s is corrupted.', $sessionID));
+			throw new RuntimeException(sprintf('GUID record %s is corrupted.', $guidHash));
 		}
 
 		return $data;
@@ -179,7 +209,7 @@ final class RotatingGUIDSessionStore
 		$json = json_encode($record, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
 		if ($json === false) {
-			throw new RuntimeException('Unable to encode session record.');
+			throw new RuntimeException('Unable to encode GUID record.');
 		}
 
 		rewind($handle);
@@ -188,19 +218,44 @@ final class RotatingGUIDSessionStore
 		fflush($handle);
 	}
 
-	private function buildSessionPayload(array $record, string $commandGUID): array
+	private function writeRecordToPath(string $path, array $record): void
+	{
+		$json = json_encode($record, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+		if ($json === false) {
+			throw new RuntimeException('Unable to encode GUID record.');
+		}
+
+		$result = file_put_contents($path, $json, LOCK_EX);
+
+		if ($result === false) {
+			throw new RuntimeException(sprintf('Unable to write GUID record: %s', $path));
+		}
+	}
+
+	private function assertOperationResult(mixed $result): void
+	{
+		if (!is_array($result) || !isset($result['status_code'], $result['response']) || !is_array($result['response'])) {
+			throw new RuntimeException('Authenticated operation did not return the expected response envelope.');
+		}
+	}
+
+	private function buildGUIDPayload(string $guid, int $sequence, int $expiresAt): array
 	{
 		return [
-			'session_id' => (string) $record['session_id'],
-			'command_guid' => $commandGUID,
-			'sequence' => (int) $record['sequence'],
-			'expires_at' => gmdate(DATE_ATOM, (int) $record['expires_at']),
+			'guid' => $guid,
+			'guid_sequence' => $sequence,
+			'guid_expires_at' => gmdate(DATE_ATOM, $expiresAt),
 		];
 	}
 
-	private function hashValue(string $value): string
+	private function hashGUID(string $guid): string
 	{
-		return hash('sha256', $value);
+		if (preg_match('/^[a-f0-9-]{36}$/i', $guid) !== 1) {
+			throw new HTTPException(401, 'AUTH_GUID_INVALID', 'GUID format is invalid.');
+		}
+
+		return hash('sha256', strtolower($guid));
 	}
 
 	private function generateGUID(): string

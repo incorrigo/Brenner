@@ -1,30 +1,20 @@
 # Private Database Gateway
 
-This project is a PHP-only HTTPS JSON API for a C# Windows desktop client that needs indirect access to MySQL or MariaDB data on a hosted web system.
+This project is a PHP-only `HTTPS` JSON API for a C# Windows desktop client that needs indirect access to MySQL or MariaDB data on a hosted web system.
 
 The desktop client talks to `public/api.php`.
 PHP talks to MySQL on `localhost:3306`.
 The desktop client never receives database credentials.
 
-## What Changed
-
-- Browser-first assumptions were removed.
-- The API now accepts `POST` JSON only.
-- The API now enforces `HTTPS`.
-- Stateless bearer tokens were replaced with a rotating single-use session GUID.
-- The server replays the last response when the exact same consumed GUID is retried.
-- Response payloads now use a stable envelope for C# DTO deserialization.
-- A sample C# caller was updated at `examples/CSharp/HTTPSAPIGatewayClient.cs`.
-
 ## Files
 
 - `config/app.php`: app-wide settings such as timezone and HTTPS enforcement.
-- `config/auth.php`: rotating session settings and desktop client auth config.
+- `config/auth.php`: GUID lifetime and desktop client auth config.
 - `config/auth.local.php.example`: local-only desktop client secret hashes.
 - `config/databases.php`: fixed MySQL connection defaults for `localhost:3306`.
 - `config/databases.local.php`: local-only database name, username, and password.
-- `config/actions.php`: allowlisted actions and required scopes.
-- `storage/api_sessions/`: runtime session storage for rotating command GUIDs.
+- `config/actions.php`: allowlisted actions, scopes, and GUID-consumption rules.
+- `storage/api_sessions/`: runtime storage for active and spent GUID records.
 - `public/api.php`: HTTPS JSON API entry point.
 - `public/index.php`: human-readable API reference page.
 - `examples/CSharp/HTTPSAPIGatewayClient.cs`: sample C# caller.
@@ -68,7 +58,9 @@ Every request is:
 - `Content-Type: application/json`
 - `HTTPS`
 
-Login request:
+Your site already has `HSTS`, which is good. The API still checks for `HTTPS` on each request.
+
+Open-link request:
 
 ```json
 {
@@ -84,12 +76,11 @@ Authenticated request:
 
 ```json
 {
-  "action": "LINK.PING",
-  "session": {
-    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
-    "command_guid": "8ef175e9-e388-4c83-940b-6f4f97d58868"
-  },
-  "params": {}
+  "action": "LINK.ECHO",
+  "guid": "8ef175e9-e388-4c83-940b-6f4f97d58868",
+  "params": {
+    "nonce": "retry-me"
+  }
 }
 ```
 
@@ -100,78 +91,50 @@ Success response envelope:
   "ok": true,
   "request_id": "d3c48f7f4f264d7ea0d0f4d1d1684f51",
   "timestamp": "2026-03-14T02:00:00+00:00",
-  "action": "LINK.PING",
+  "action": "LINK.ECHO",
   "data": {
-    "authenticated": true,
-    "message": "Rotating link is alive."
+    "echo": {
+      "nonce": "retry-me"
+    },
+    "message": "Echo accepted."
   },
   "meta": {
     "method": "POST",
-    "type": "static"
+    "type": "echo"
   },
   "client": {
     "client_id": "DESKTOP001",
     "scopes": [
-      "users.read"
+      "gateway.basic"
     ]
   },
-  "session": {
-    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
-    "command_guid": "3cfb7b95-358c-4f45-b0aa-5c37a9ee25d2",
-    "sequence": 1,
-    "expires_at": "2026-03-14T02:30:00+00:00"
-  },
+  "guid": "3cfb7b95-358c-4f45-b0aa-5c37a9ee25d2",
+  "guid_sequence": 1,
+  "guid_expires_at": "2026-03-14T02:30:00+00:00",
   "error": null
 }
 ```
 
-Error response envelope:
+## GUID Policy
 
-```json
-{
-  "ok": false,
-  "request_id": "d3c48f7f4f264d7ea0d0f4d1d1684f51",
-  "action": "LINK.PING",
-  "data": null,
-  "meta": null,
-  "client": {
-    "client_id": "DESKTOP001",
-    "scopes": [
-      "users.read"
-    ]
-  },
-  "session": {
-    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
-    "command_guid": "3cfb7b95-358c-4f45-b0aa-5c37a9ee25d2",
-    "sequence": 1,
-    "expires_at": "2026-03-14T02:30:00+00:00"
-  },
-  "error": {
-    "http_status": 422,
-    "code": "VALIDATION_MISSING_PARAMETER",
-    "message": "Missing required parameter \"id\".",
-    "details": {
-      "parameter": "id"
-    }
-  },
-  "timestamp": "2026-03-14T02:00:00+00:00"
-}
-```
+- `AUTH.OPEN_LINK` returns the first GUID.
+- Non-consuming authenticated actions such as `LINK.INFO` and `LINK.REQUIRE_TAG` keep the same GUID and refresh its expiry.
+- Consuming actions return a fresh GUID. The current schema-free consuming action is `LINK.ECHO`.
+- SQL actions with `'result' => 'write'` consume the GUID by default unless you override them.
 
 ## Replay Behavior
 
-If the server consumed a command GUID and the response was lost in transit, the client can retry the exact same request with the same consumed GUID. The gateway will replay the cached previous response instead of breaking the session.
+If a consuming action succeeded on the server but the response was lost in transit, the client can retry the exact same request with the same spent GUID. The gateway replays the cached prior response, including the replacement GUID.
 
-If the client retries a different request body with a consumed GUID, the gateway rejects it.
+If the client retries a different request body with a spent GUID, the gateway rejects it with `AUTH_GUID_ALREADY_USED`.
 
 ## Current Example Actions
 
-- `AUTH.OPEN_LINK`: issue a session ID and the first command GUID.
-- `SYSTEM.STATUS`: unauthenticated health check.
-- `LINK.PING`: authenticated protocol probe that does not depend on the database schema.
-- `LINK.ECHO`: authenticated echo action used for replay and retry verification.
-- `USERS.LIST`: authenticated SQL read action requiring `users.read`.
-- `USER.BY_ID`: authenticated SQL read action requiring `users.read`.
+- `AUTH.OPEN_LINK`: issue the first GUID.
+- `SYSTEM.STATUS`: unauthenticated status check.
+- `LINK.ECHO`: authenticated echo action used for replay and retry verification. This action consumes the GUID.
+- `LINK.INFO`: authenticated schema-free probe. This action reuses the GUID.
+- `LINK.REQUIRE_TAG`: authenticated schema-free validation probe requiring `params.tag`. This action reuses the GUID.
 
 ## Security Notes
 
@@ -179,5 +142,6 @@ If the client retries a different request body with a consumed GUID, the gateway
 - Do not expose raw SQL to the desktop client.
 - Keep database credentials and auth secrets in `*.local.php` files only.
 - Do not SHA-512 the MySQL password before giving it to PDO. PDO needs the real password.
-- The rotating command GUID is not a substitute for `HTTPS`; it assumes a protected transport.
+- The rotating GUID does not replace `HTTPS`; it assumes a protected transport.
 - A single embedded desktop client secret is still extractable. For real per-user auth, replace `AUTH.OPEN_LINK` with your own user login flow.
+- Table-specific SQL is intentionally not enabled by default. Add your own SQL actions in `config/actions.php` for your real schema.

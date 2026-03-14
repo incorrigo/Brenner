@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use Brenner\Api\APIActionRunner;
+use Brenner\API\APIActionRunner;
 use Brenner\Auth\ClientCredentialStore;
 use Brenner\Auth\RotatingGUIDSessionStore;
 use Brenner\Database\DatabaseManager;
@@ -33,23 +33,24 @@ try {
 
 	$params = resolveInputParams($body);
 	$action = resolveActionConfig($config, $actionName);
-	$sessionStore = new RotatingGUIDSessionStore($config->auth());
+	$guidStore = new RotatingGUIDSessionStore($config->auth());
 	$runner = new APIActionRunner(
 		$config,
 		new DatabaseManager($config->databases()),
 		new ClientCredentialStore($config->auth('clients', [])),
-		$sessionStore
+		$guidStore
 	);
 
 	if (($action['requires_auth'] ?? true) === true) {
-		$sessionRequest = resolveSessionRequest($body);
-		$requestFingerprint = buildRequestFingerprint($actionName, $params);
+		$guid = resolveGUID($body);
+		$consumeGUID = actionConsumesGUID($action);
+		$requestFingerprint = $consumeGUID ? buildRequestFingerprint($actionName, $params) : null;
 
-		$result = $sessionStore->execute(
-			$sessionRequest['session_id'],
-			$sessionRequest['command_guid'],
+		$result = $guidStore->execute(
+			$guid,
+			$consumeGUID,
 			$requestFingerprint,
-			function (array $clientContext, array $nextSession) use ($action, $actionName, $config, $params, $requestID, $runner): array {
+			function (array $clientContext, array $guidState) use ($action, $actionName, $config, $params, $requestID, $runner): array {
 				try {
 					authorizeScopes($action, $clientContext);
 					$actionResult = $runner->run($actionName, 'POST', $params);
@@ -60,7 +61,7 @@ try {
 							$requestID,
 							$actionResult,
 							buildClientMeta($actionResult['client'] ?? null, $clientContext),
-							$actionResult['session'] ?? null
+							$guidState
 						),
 					];
 				} catch (HTTPException $exception) {
@@ -73,7 +74,8 @@ try {
 							$exception->errorCode(),
 							$exception->getMessage(),
 							$exception->details(),
-							buildClientMeta(null, $clientContext)
+							buildClientMeta(null, $clientContext),
+							$guidState
 						),
 					];
 				} catch (Throwable $exception) {
@@ -88,7 +90,8 @@ try {
 							'INTERNAL_SERVER_ERROR',
 							$debug ? $exception->getMessage() : 'Internal server error.',
 							$debug ? ['trace' => explode(PHP_EOL, $exception->getTraceAsString())] : [],
-							buildClientMeta(null, $clientContext)
+							buildClientMeta(null, $clientContext),
+							$guidState
 						),
 					];
 				}
@@ -106,7 +109,7 @@ try {
 			$requestID,
 			$actionResult,
 			$actionResult['client'] ?? null,
-			$actionResult['session'] ?? null
+			$actionResult['guid_state'] ?? null
 		)
 	);
 } catch (HTTPException $exception) {
@@ -205,25 +208,15 @@ function resolveInputParams(array $body): array
 	return $params;
 }
 
-function resolveSessionRequest(array $body): array
+function resolveGUID(array $body): string
 {
-	$session = $body['session'] ?? null;
+	$guid = trim((string) ($body['guid'] ?? ''));
 
-	if (!is_array($session)) {
-		throw new HTTPException(401, 'AUTH_SESSION_REQUIRED', 'Authenticated actions require a session object.');
+	if ($guid === '') {
+		throw new HTTPException(401, 'AUTH_GUID_REQUIRED', 'Authenticated actions require a GUID.');
 	}
 
-	$sessionID = trim((string) ($session['session_id'] ?? ''));
-	$commandGUID = trim((string) ($session['command_guid'] ?? ''));
-
-	if ($sessionID === '' || $commandGUID === '') {
-		throw new HTTPException(401, 'AUTH_SESSION_REQUIRED', 'Session ID and command GUID are required.');
-	}
-
-	return [
-		'session_id' => $sessionID,
-		'command_guid' => $commandGUID,
-	];
+	return $guid;
 }
 
 function resolveActionConfig(Config $config, string $actionName): array
@@ -247,7 +240,7 @@ function authorizeScopes(array $action, array $clientContext): void
 	$missingScopes = array_values(array_diff($requiredScopes, $clientScopes));
 
 	if ($missingScopes !== []) {
-		throw new HTTPException(403, 'AUTH_SCOPE_DENIED', 'Session does not grant the required scopes.', [
+		throw new HTTPException(403, 'AUTH_SCOPE_DENIED', 'GUID does not grant the required scopes.', [
 			'missing_scopes' => $missingScopes,
 		]);
 	}
@@ -269,7 +262,7 @@ function buildClientMeta(?array $explicitClient, ?array $clientContext = null): 
 	];
 }
 
-function buildSuccessResponse(string $requestID, array $actionResult, ?array $client = null, ?array $session = null): array
+function buildSuccessResponse(string $requestID, array $actionResult, ?array $client = null, ?array $guidState = null): array
 {
 	return [
 		'ok' => true,
@@ -279,7 +272,9 @@ function buildSuccessResponse(string $requestID, array $actionResult, ?array $cl
 		'data' => $actionResult['data'] ?? null,
 		'meta' => $actionResult['meta'] ?? null,
 		'client' => $client ?? ($actionResult['client'] ?? null),
-		'session' => $session ?? ($actionResult['session'] ?? null),
+		'guid' => $guidState['guid'] ?? null,
+		'guid_sequence' => $guidState['guid_sequence'] ?? null,
+		'guid_expires_at' => $guidState['guid_expires_at'] ?? null,
 		'error' => null,
 	];
 }
@@ -292,7 +287,7 @@ function buildErrorResponse(
 	string $message,
 	array $details = [],
 	?array $client = null,
-	?array $session = null
+	?array $guidState = null
 ): array {
 	return [
 		'ok' => false,
@@ -302,7 +297,9 @@ function buildErrorResponse(
 		'data' => null,
 		'meta' => null,
 		'client' => $client,
-		'session' => $session,
+		'guid' => $guidState['guid'] ?? null,
+		'guid_sequence' => $guidState['guid_sequence'] ?? null,
+		'guid_expires_at' => $guidState['guid_expires_at'] ?? null,
 		'error' => [
 			'http_status' => $statusCode,
 			'code' => $errorCode,
@@ -327,6 +324,16 @@ function resolveRequestID(): string
 	}
 
 	return bin2hex(random_bytes(16));
+}
+
+function actionConsumesGUID(array $action): bool
+{
+	if (array_key_exists('consume_guid', $action)) {
+		return (bool) $action['consume_guid'];
+	}
+
+	return strtolower((string) ($action['type'] ?? '')) === 'sql'
+		&& strtolower((string) ($action['result'] ?? '')) === 'write';
 }
 
 function buildRequestFingerprint(string $actionName, array $params): string

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Brenner\Api;
+namespace Brenner\API;
 
 use Brenner\Auth\ClientCredentialStore;
 use Brenner\Auth\RotatingGUIDSessionStore;
@@ -10,6 +10,7 @@ use Brenner\Database\DatabaseManager;
 use Brenner\Support\Config;
 use Brenner\Support\HTTPException;
 use PDO;
+use PDOStatement;
 use Throwable;
 
 final class APIActionRunner
@@ -17,18 +18,18 @@ final class APIActionRunner
 	private Config $config;
 	private DatabaseManager $databaseManager;
 	private ClientCredentialStore $clientCredentialStore;
-	private RotatingGUIDSessionStore $sessionStore;
+	private RotatingGUIDSessionStore $guidStore;
 
 	public function __construct(
 		Config $config,
 		DatabaseManager $databaseManager,
 		ClientCredentialStore $clientCredentialStore,
-		RotatingGUIDSessionStore $sessionStore
+		RotatingGUIDSessionStore $guidStore
 	) {
 		$this->config = $config;
 		$this->databaseManager = $databaseManager;
 		$this->clientCredentialStore = $clientCredentialStore;
-		$this->sessionStore = $sessionStore;
+		$this->guidStore = $guidStore;
 	}
 
 	public function run(string $actionName, string $requestMethod, array $input): array
@@ -86,7 +87,7 @@ final class APIActionRunner
 			(string) ($params['client_id'] ?? ''),
 			(string) ($params['client_secret'] ?? '')
 		);
-		$sessionData = $this->sessionStore->openSession($client['client_id'], $client['scopes']);
+		$guidState = $this->guidStore->openSession($client['client_id'], $client['scopes']);
 
 		return [
 			'action' => $actionName,
@@ -98,7 +99,7 @@ final class APIActionRunner
 				'client_id' => $client['client_id'],
 				'scopes' => $client['scopes'],
 			],
-			'session' => $sessionData,
+			'guid_state' => $guidState,
 			'meta' => [
 				'method' => $requestMethod,
 				'type' => 'session_open',
@@ -321,7 +322,7 @@ final class APIActionRunner
 		return PDO::PARAM_STR;
 	}
 
-	private function formatResult(PDO $connection, \PDOStatement $statement, string $mode): mixed
+	private function formatResult(PDO $connection, PDOStatement $statement, string $mode): mixed
 	{
 		return match ($mode) {
 			'one' => $statement->fetch() ?: null,

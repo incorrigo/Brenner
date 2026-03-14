@@ -8,6 +8,16 @@ require_once dirname(__DIR__) . '/src/autoload.php';
 
 $config = Config::fromDirectory(dirname(__DIR__) . '/config');
 $actions = $config->actions();
+
+function actionConsumesGUID(array $action): bool
+{
+	if (array_key_exists('consume_guid', $action)) {
+		return (bool) $action['consume_guid'];
+	}
+
+	return strtolower((string) ($action['type'] ?? '')) === 'sql'
+		&& strtolower((string) ($action['result'] ?? '')) === 'write';
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -131,9 +141,9 @@ $actions = $config->actions();
 <body>
 <main>
 	<section class="panel">
-		<div class="badge">HTTPS Rotating Link</div>
+		<div class="badge">HTTPS Rotating GUID</div>
 		<h1>Private Database Gateway</h1>
-		<p class="lead">This endpoint is designed for a C# Windows desktop client using a rotating single-use command GUID.</p>
+		<p class="lead">This endpoint is designed for a C# Windows desktop client using one GUID that only rotates on selected actions.</p>
 		<div class="notice">
 			All application requests go to <code>/api.php</code> as <code>POST</code> JSON over <code>HTTPS</code>. The PHP server then talks to MySQL on <code>localhost:3306</code>.
 		</div>
@@ -149,20 +159,19 @@ $actions = $config->actions();
     "client_secret": "your-client-secret"
   }
 }</pre>
-			<p>The response returns a <code>session_id</code> and a one-time <code>command_guid</code>.</p>
+			<p>The response returns the first valid <code>guid</code>.</p>
 		</article>
 
 		<article class="panel">
 			<h2>Authenticated Request</h2>
 			<pre>{
-  "action": "LINK.PING",
-  "session": {
-    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
-    "command_guid": "8ef175e9-e388-4c83-940b-6f4f97d58868"
-  },
-  "params": {}
+  "action": "LINK.ECHO",
+  "guid": "8ef175e9-e388-4c83-940b-6f4f97d58868",
+  "params": {
+    "nonce": "retry-me"
+  }
 }</pre>
-			<p>Every authenticated response returns the next <code>command_guid</code>. The old one is invalid after one use.</p>
+			<p>Read-style actions keep the same <code>guid</code>. Consuming actions return a fresh one.</p>
 		</article>
 	</section>
 
@@ -171,27 +180,26 @@ $actions = $config->actions();
 		<pre>{
   "ok": true,
   "request_id": "d3c48f7f4f264d7ea0d0f4d1d1684f51",
-  "action": "LINK.PING",
+  "action": "LINK.ECHO",
   "data": {
-    "authenticated": true,
-    "message": "Rotating link is alive."
+    "echo": {
+      "nonce": "retry-me"
+    },
+    "message": "Echo accepted."
   },
   "client": {
     "client_id": "DESKTOP001",
     "scopes": [
-      "users.read"
+      "gateway.basic"
     ]
   },
-  "session": {
-    "session_id": "f2cb8d9e-2af7-4f93-9f33-e0f5841dca74",
-    "command_guid": "3cfb7b95-358c-4f45-b0aa-5c37a9ee25d2",
-    "sequence": 1,
-    "expires_at": "2026-03-14T02:30:00+00:00"
-  },
+  "guid": "3cfb7b95-358c-4f45-b0aa-5c37a9ee25d2",
+  "guid_sequence": 1,
+  "guid_expires_at": "2026-03-14T02:30:00+00:00",
   "error": null
 }</pre>
-			<p>If the client retries the exact same request because the response was lost, the gateway replays the cached prior response instead of breaking session state.</p>
-		</section>
+			<p>If the client retries the exact same consuming request because the response was lost, the gateway replays the cached prior response instead of breaking GUID state.</p>
+	</section>
 
 	<section class="panel">
 		<h2>Configured Actions</h2>
@@ -200,6 +208,7 @@ $actions = $config->actions();
 				<tr>
 					<th>Action</th>
 					<th>Auth</th>
+					<th>GUID</th>
 					<th>Description</th>
 				</tr>
 			</thead>
@@ -207,7 +216,8 @@ $actions = $config->actions();
 				<?php foreach ($actions as $name => $action): ?>
 					<tr>
 						<td><strong><?= htmlspecialchars($name, ENT_QUOTES) ?></strong></td>
-						<td><?= ($action['requires_auth'] ?? true) === true ? 'Rotating link' : 'Credentials only' ?></td>
+						<td><?= ($action['requires_auth'] ?? true) === true ? 'GUID required' : 'Credentials only' ?></td>
+						<td><?= ($action['requires_auth'] ?? true) === true ? (actionConsumesGUID($action) ? 'Consumes' : 'Reuses') : 'N/A' ?></td>
 						<td><?= htmlspecialchars((string) ($action['description'] ?? 'No description.'), ENT_QUOTES) ?></td>
 					</tr>
 				<?php endforeach; ?>
@@ -218,6 +228,8 @@ $actions = $config->actions();
 	<section class="panel">
 		<h2>Desktop Sample</h2>
 		<p>The sample C# caller lives at <code>examples/CSharp/HTTPSAPIGatewayClient.cs</code>.</p>
+		<p>Use <code>AUTH.OPEN_LINK</code> once, then keep sending the latest top-level <code>guid</code> from the last response.</p>
+		<p>Default actions are schema-free. Add your own SQL actions for your real tables in <code>config/actions.php</code>.</p>
 		<p>API version: <strong><?= htmlspecialchars((string) $config->app('api_version', 'unknown'), ENT_QUOTES) ?></strong></p>
 	</section>
 </main>

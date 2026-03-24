@@ -37,7 +37,10 @@ final class DatabaseManager
 	private function createConnection(array $profile): PDO
 	{
 		$profile = array_replace($this->profileDefaults, $profile);
-		$driver = strtolower((string) ($profile['driver'] ?? ''));
+		$driver = strtolower(trim((string) ($profile['driver'] ?? '')));
+		if ($driver === '') {
+			$driver = strtolower(trim((string) ($this->profileDefaults['driver'] ?? 'mysql')));
+		}
 		$username = $profile['username'] ?? null;
 		$password = $profile['password'] ?? null;
 		$options = $profile['options'] ?? [];

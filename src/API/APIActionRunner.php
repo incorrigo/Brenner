@@ -382,7 +382,7 @@ final class APIActionRunner
 
 	private function normalizeMap(string $name, mixed $value): array
 	{
-		if (!is_array($value) || array_is_list($value)) {
+		if (!is_array($value) || ($value !== [] && array_is_list($value))) {
 			throw new HTTPException(422, 'VALIDATION_OBJECT_REQUIRED', sprintf('Parameter "%s" must be an object.', $name), [
 				'parameter' => $name,
 			]);

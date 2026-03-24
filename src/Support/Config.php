@@ -26,7 +26,10 @@ final class Config
 		$app = self::loadConfigPair($configDirectory, 'app');
 		$auth = self::loadConfigPair($configDirectory, 'auth');
 		$databases = self::loadConfigPair($configDirectory, 'databases');
-		$actions = self::loadConfigPair($configDirectory, 'actions');
+		$actions = array_replace_recursive(
+			self::builtInActions(),
+			self::loadConfigPair($configDirectory, 'actions')
+		);
 
 		return new self($app, $auth, $databases, $actions);
 	}
@@ -109,5 +112,221 @@ final class Config
 		}
 
 		return $config;
+	}
+
+	private static function builtInActions(): array
+	{
+		return [
+			'AUTH.OPEN_LINK' => [
+				'type' => 'session_open',
+				'methods' => ['POST'],
+				'requires_auth' => false,
+				'params' => [
+					'client_id' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 3,
+						'max_length' => 100,
+					],
+					'client_secret' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 8,
+						'max_length' => 200,
+						'trim' => false,
+					],
+				],
+			],
+			'SYSTEM.STATUS' => [
+				'type' => 'static',
+				'methods' => ['POST'],
+				'requires_auth' => false,
+				'payload' => [
+					'online' => true,
+					'message' => 'Gateway is running.',
+					'transport' => 'HTTPS',
+					'authentication' => 'Rotating GUID with selective consumption',
+				],
+			],
+			'LINK.ECHO' => [
+				'type' => 'echo',
+				'methods' => ['POST'],
+				'consume_guid' => true,
+				'params' => [
+					'nonce' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 1,
+						'max_length' => 200,
+					],
+				],
+			],
+			'LINK.INFO' => [
+				'type' => 'static',
+				'methods' => ['POST'],
+				'consume_guid' => false,
+				'payload' => [
+					'authenticated' => true,
+					'mode' => 'guid-reuse',
+					'message' => 'Authenticated non-consuming action succeeded.',
+				],
+			],
+			'LINK.REQUIRE_TAG' => [
+				'type' => 'static',
+				'methods' => ['POST'],
+				'consume_guid' => false,
+				'params' => [
+					'tag' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 1,
+						'max_length' => 64,
+					],
+				],
+				'payload' => [
+					'accepted' => true,
+					'message' => 'Required tag accepted.',
+				],
+			],
+			'DB.PROFILES' => [
+				'type' => 'db_profiles',
+				'methods' => ['POST'],
+				'consume_guid' => false,
+				'scopes' => ['db.read'],
+			],
+			'DB.TABLES' => [
+				'type' => 'db_tables',
+				'methods' => ['POST'],
+				'consume_guid' => false,
+				'scopes' => ['db.read'],
+				'params' => [
+					'database' => [
+						'type' => 'string',
+						'nullable' => true,
+						'min_length' => 1,
+						'max_length' => 100,
+					],
+					'schema' => [
+						'type' => 'string',
+						'nullable' => true,
+						'max_length' => 128,
+					],
+				],
+			],
+			'DB.COLUMNS' => [
+				'type' => 'db_columns',
+				'methods' => ['POST'],
+				'consume_guid' => false,
+				'scopes' => ['db.read'],
+				'params' => [
+					'database' => [
+						'type' => 'string',
+						'nullable' => true,
+						'min_length' => 1,
+						'max_length' => 100,
+					],
+					'schema' => [
+						'type' => 'string',
+						'nullable' => true,
+						'max_length' => 128,
+					],
+					'table' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 1,
+						'max_length' => 128,
+					],
+				],
+			],
+			'DB.READ' => [
+				'type' => 'db_read',
+				'methods' => ['POST'],
+				'consume_guid' => false,
+				'scopes' => ['db.read'],
+				'params' => [
+					'database' => [
+						'type' => 'string',
+						'nullable' => true,
+						'min_length' => 1,
+						'max_length' => 100,
+					],
+					'sql' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 1,
+						'max_length' => 12000,
+					],
+					'bindings' => [
+						'type' => 'map',
+						'default' => [],
+					],
+					'max_rows' => [
+						'type' => 'int',
+						'default' => 500,
+						'min' => 1,
+						'max' => 5000,
+					],
+				],
+			],
+			'DB.WRITE' => [
+				'type' => 'db_write',
+				'methods' => ['POST'],
+				'consume_guid' => true,
+				'scopes' => ['db.write'],
+				'params' => [
+					'database' => [
+						'type' => 'string',
+						'nullable' => true,
+						'min_length' => 1,
+						'max_length' => 100,
+					],
+					'sql' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 1,
+						'max_length' => 12000,
+					],
+					'bindings' => [
+						'type' => 'map',
+						'default' => [],
+					],
+				],
+			],
+			'DB.EXECUTE' => [
+				'type' => 'db_execute',
+				'methods' => ['POST'],
+				'consume_guid' => true,
+				'scopes' => ['db.admin'],
+				'params' => [
+					'database' => [
+						'type' => 'string',
+						'nullable' => true,
+						'min_length' => 1,
+						'max_length' => 100,
+					],
+					'sql' => [
+						'type' => 'string',
+						'required' => true,
+						'min_length' => 1,
+						'max_length' => 120000,
+						'trim' => false,
+					],
+					'bindings' => [
+						'type' => 'map',
+						'default' => [],
+					],
+					'max_rows' => [
+						'type' => 'int',
+						'default' => 500,
+						'min' => 1,
+						'max' => 10000,
+					],
+					'all_rowsets' => [
+						'type' => 'bool',
+						'default' => true,
+					],
+				],
+			],
+		];
 	}
 }
